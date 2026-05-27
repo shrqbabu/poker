@@ -1,814 +1,256 @@
-import React, {
-  createContext,
-  useContext,
-  useEffect,
-  useState,
-} from 'react';
+// src/pages/auth/LoginPage.tsx
+
+import React, { useState } from 'react';
 
 import {
-  onAuthStateChanged,
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  signOut,
-  sendPasswordResetEmail,
-  updateProfile,
-  type User,
-} from 'firebase/auth';
+  Link,
+  useNavigate,
+} from 'react-router-dom';
 
 import {
-  doc,
-  setDoc,
-  getDoc,
-  updateDoc,
-  serverTimestamp,
-} from 'firebase/firestore';
-
-import { auth, db } from '../lib/firebase';
-
-import type {
-  UserProfile,
-  UserWallet,
-} from '../types';
+  useForm,
+} from 'react-hook-form';
 
 import {
-  generateReferralCode,
-  generateAvatar,
-} from '../utils/helpers';
+  Eye,
+  EyeOff,
+  Mail,
+  Lock,
+  LogIn,
+} from 'lucide-react';
 
 import toast from 'react-hot-toast';
 
-// ============================================================
-// TYPES
-// ============================================================
+// ✅ FIXED IMPORT PATH
+import {
+  useAuth,
+} from '../../contexts/AuthContext';
 
-interface AuthContextType {
-  user: User | null;
-  userProfile: UserProfile | null;
-  loading: boolean;
-  isAdmin: boolean;
-
-  login: (
-    email: string,
-    password: string
-  ) => Promise<void>;
-
-  signup: (
-    email: string,
-    username: string,
-    password: string
-  ) => Promise<void>;
-
-  logout: () => Promise<void>;
-
-  resetPassword: (
-    email: string
-  ) => Promise<void>;
-
-  updateUserProfile: (
-    data: Partial<UserProfile>
-  ) => Promise<void>;
-
-  refreshProfile: () => Promise<void>;
-
-  updateWallet: (
-    wallet: Partial<UserWallet>
-  ) => Promise<void>;
-
-  addDemoChips: (
-    amount: number
-  ) => Promise<void>;
+interface LoginFormData {
+  email: string;
+  password: string;
 }
 
-const AuthContext =
-  createContext<AuthContextType | null>(
-    null
-  );
+const LoginPage: React.FC = () => {
+  const navigate = useNavigate();
 
-// ============================================================
-// DEFAULTS
-// ============================================================
+  const {
+    login,
+  } = useAuth();
 
-const getDefaultWallet =
-  (): UserWallet => ({
-    mainBalance: 0,
-    depositBalance: 0,
-    winningBalance: 0,
-    bonusBalance: 100,
-    totalDeposited: 0,
-    totalWon: 0,
-    totalWithdrawn: 0,
-  });
-
-const createDefaultProfile = (
-  uid: string,
-  email: string,
-  username: string
-): UserProfile => ({
-  uid,
-  username,
-  email,
-  displayName: username,
-
-  avatarUrl: '',
-  avatarIndex:
-    Math.floor(Math.random() * 8),
-
-  role: email.includes('admin')
-    ? 'admin'
-    : 'player',
-
-  status: 'active',
-
-  wallet: getDefaultWallet(),
-
-  demoChips: 5000,
-
-  joinDate:
-    new Date().toISOString(),
-
-  lastSeen:
-    new Date().toISOString(),
-
-  gamesPlayed: 0,
-  gamesWon: 0,
-  totalEarnings: 0,
-
-  referralCode:
-    generateReferralCode(uid),
-
-  level: 1,
-  xp: 0,
-
-  dailyBonusLastClaimed: '',
-});
-
-// ============================================================
-// PROVIDER
-// ============================================================
-
-export const AuthProvider: React.FC<{
-  children: React.ReactNode;
-}> = ({ children }) => {
-  const [user, setUser] =
-    useState<User | null>(null);
-
-  const [userProfile, setUserProfile] =
-    useState<UserProfile | null>(null);
+  const [showPassword, setShowPassword] =
+    useState(false);
 
   const [loading, setLoading] =
-    useState(true);
+    useState(false);
 
-  const isAdmin =
-    userProfile?.role === 'admin' ||
-    userProfile?.role ===
-      'moderator';
+  const {
+    register,
+    handleSubmit,
+    formState: { errors },
+  } = useForm<LoginFormData>();
 
-  // ============================================================
-  // AUTH STATE
-  // ============================================================
-
-  useEffect(() => {
-    const unsubscribe =
-      onAuthStateChanged(
-        auth,
-        async (firebaseUser) => {
-          try {
-            setLoading(true);
-
-            setUser(firebaseUser);
-
-            if (firebaseUser) {
-              await loadUserProfile(
-                firebaseUser.uid,
-                firebaseUser.email || '',
-                firebaseUser.displayName ||
-                  firebaseUser.email?.split(
-                    '@'
-                  )[0] ||
-                  'Player'
-              );
-            } else {
-              // DEMO FALLBACK PROFILE
-              const demoProfile =
-                createDefaultProfile(
-                  'demo-user',
-                  'demo@local.dev',
-                  'Demo Player'
-                );
-
-              demoProfile.demoChips =
-                10000;
-
-              demoProfile.gamesPlayed =
-                42;
-
-              demoProfile.gamesWon =
-                18;
-
-              demoProfile.wallet.depositBalance =
-                500;
-
-              demoProfile.wallet.winningBalance =
-                250;
-
-              setUserProfile(
-                demoProfile
-              );
-            }
-          } catch {
-            // HARD FAILSAFE
-            const demoProfile =
-              createDefaultProfile(
-                'demo-user',
-                'demo@local.dev',
-                'Demo Player'
-              );
-
-            setUserProfile(
-              demoProfile
-            );
-          } finally {
-            setLoading(false);
-          }
-        }
-      );
-
-    return unsubscribe;
-  }, []);
-
-  // ============================================================
-  // LOAD PROFILE
-  // ============================================================
-
-  const loadUserProfile =
-    async (
-      uid: string,
-      email: string,
-      username: string
-    ) => {
-      try {
-        const userRef = doc(
-          db,
-          'users',
-          uid
-        );
-
-        const userSnap =
-          await getDoc(userRef);
-
-        if (userSnap.exists()) {
-          const data =
-            userSnap.data() as UserProfile;
-
-          setUserProfile(data);
-
-          try {
-            await updateDoc(
-              userRef,
-              {
-                lastSeen:
-                  new Date().toISOString(),
-              }
-            );
-          } catch {
-            console.info(
-              '[Demo] lastSeen skipped'
-            );
-          }
-
-          return;
-        }
-
-        // CREATE LOCAL PROFILE IF NOT FOUND
-        const localProfile =
-          createDefaultProfile(
-            uid,
-            email,
-            username
-          );
-
-        setUserProfile(localProfile);
-      } catch {
-        // DEMO SAFE
-        const mockProfile =
-          createDefaultProfile(
-            uid,
-            email,
-            username
-          );
-
-        mockProfile.demoChips =
-          10000;
-
-        setUserProfile(mockProfile);
-
-        console.info(
-          '[Demo Mode] Local profile active'
-        );
-      }
-    };
-
-  // ============================================================
-  // LOGIN
-  // ============================================================
-
-  const login = async (
-    email: string,
-    password: string
+  const onSubmit = async (
+    data: LoginFormData
   ) => {
     try {
-      const result =
-        await signInWithEmailAndPassword(
-          auth,
-          email,
-          password
-        );
+      setLoading(true);
 
-      await loadUserProfile(
-        result.user.uid,
-        result.user.email || email,
-        result.user.displayName ||
-          email.split('@')[0]
+      await login(
+        data.email,
+        data.password
       );
 
       toast.success(
         'Login successful'
       );
-    } catch (error: unknown) {
-      const code = (
-        error as {
-          code?: string;
-        }
-      ).code;
 
-      // DEMO FALLBACK
-      if (
-        code ===
-          'auth/network-request-failed' ||
-        code ===
-          'auth/invalid-api-key' ||
-        code ===
-          'auth/api-key-not-valid'
-      ) {
-        const mockUid =
-          'demo-' +
-          email.replace(
-            /[^a-z0-9]/gi,
-            ''
-          );
+      navigate('/dashboard');
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : 'Login failed'
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
 
-        const mockProfile =
-          createDefaultProfile(
-            mockUid,
-            email,
-            email.split('@')[0]
-          );
+  // DEMO LOGIN
+  const handleDemoLogin =
+    async () => {
+      try {
+        setLoading(true);
 
-        mockProfile.demoChips =
-          10000;
-
-        mockProfile.gamesPlayed =
-          47;
-
-        mockProfile.gamesWon =
-          18;
-
-        mockProfile.wallet.depositBalance =
-          500;
-
-        mockProfile.wallet.winningBalance =
-          250;
-
-        mockProfile.wallet.bonusBalance =
-          100;
-
-        if (
-          email.includes('admin')
-        ) {
-          mockProfile.role =
-            'admin';
-        }
-
-        setUserProfile(
-          mockProfile
+        await login(
+          'demo@poker.com',
+          'demo123'
         );
 
         toast.success(
           'Demo login successful'
         );
 
-        return;
-      }
-
-      if (
-        code ===
-        'auth/user-not-found'
-      ) {
-        throw new Error(
-          'No account found'
-        );
-      }
-
-      if (
-        code ===
-        'auth/wrong-password'
-      ) {
-        throw new Error(
-          'Incorrect password'
-        );
-      }
-
-      if (
-        code ===
-        'auth/invalid-credential'
-      ) {
-        throw new Error(
-          'Invalid credentials'
-        );
-      }
-
-      throw new Error(
-        'Login failed'
-      );
-    }
-  };
-
-  // ============================================================
-  // SIGNUP
-  // ============================================================
-
-  const signup = async (
-    email: string,
-    username: string,
-    password: string
-  ) => {
-    try {
-      const result =
-        await createUserWithEmailAndPassword(
-          auth,
-          email,
-          password
-        );
-
-      await updateProfile(
-        result.user,
-        {
-          displayName:
-            username,
-        }
-      );
-
-      const profile =
-        createDefaultProfile(
-          result.user.uid,
-          email,
-          username
-        );
-
-      try {
-        await setDoc(
-          doc(
-            db,
-            'users',
-            result.user.uid
-          ),
-          {
-            ...profile,
-            createdAt:
-              serverTimestamp(),
-          }
-        );
-      } catch {
-        console.info(
-          '[Demo] Firestore skipped'
-        );
-      }
-
-      setUserProfile(profile);
-
-      generateAvatar(
-        username
-      );
-
-      toast.success(
-        'Signup successful'
-      );
-    } catch (error: unknown) {
-      const code = (
-        error as {
-          code?: string;
-        }
-      ).code;
-
-      // DEMO MODE
-      if (
-        code ===
-          'auth/network-request-failed' ||
-        code ===
-          'auth/invalid-api-key' ||
-        code ===
-          'auth/api-key-not-valid'
-      ) {
-        const mockUid =
-          'demo-' + Date.now();
-
-        const mockProfile =
-          createDefaultProfile(
-            mockUid,
-            email,
-            username
-          );
-
-        setUserProfile(
-          mockProfile
-        );
-
-        toast.success(
-          'Demo signup successful'
-        );
-
-        return;
-      }
-
-      if (
-        code ===
-        'auth/email-already-in-use'
-      ) {
-        throw new Error(
-          'Email already exists'
-        );
-      }
-
-      if (
-        code ===
-        'auth/weak-password'
-      ) {
-        throw new Error(
-          'Weak password'
-        );
-      }
-
-      throw new Error(
-        'Signup failed'
-      );
-    }
-  };
-
-  // ============================================================
-  // LOGOUT
-  // ============================================================
-
-  const logout =
-    async (): Promise<void> => {
-      try {
-        await signOut(auth);
-      } catch {
-        console.info(
-          '[Demo] logout local'
-        );
-      }
-
-      setUser(null);
-      setUserProfile(null);
-    };
-
-  // ============================================================
-  // RESET PASSWORD
-  // ============================================================
-
-  const resetPassword =
-    async (
-      email: string
-    ): Promise<void> => {
-      try {
-        await sendPasswordResetEmail(
-          auth,
-          email
-        );
-
-        toast.success(
-          'Reset email sent'
-        );
+        navigate('/dashboard');
       } catch {
         toast.success(
-          'Demo reset simulated'
+          'Demo mode activated'
         );
+
+        navigate('/dashboard');
+      } finally {
+        setLoading(false);
       }
-    };
-
-  // ============================================================
-  // PROFILE UPDATE
-  // ============================================================
-
-  const updateUserProfile =
-    async (
-      data: Partial<UserProfile>
-    ) => {
-      if (!userProfile) {
-        return;
-      }
-
-      const uid =
-        user?.uid ||
-        userProfile.uid;
-
-      const updatedProfile = {
-        ...userProfile,
-        ...data,
-      };
-
-      setUserProfile(
-        updatedProfile
-      );
-
-      try {
-        await updateDoc(
-          doc(
-            db,
-            'users',
-            uid
-          ),
-          data as Record<
-            string,
-            unknown
-          >
-        );
-      } catch {
-        console.info(
-          '[Demo] profile local update'
-        );
-      }
-    };
-
-  // ============================================================
-  // REFRESH
-  // ============================================================
-
-  const refreshProfile =
-    async () => {
-      const uid =
-        user?.uid ||
-        userProfile?.uid;
-
-      if (!uid) {
-        return;
-      }
-
-      await loadUserProfile(
-        uid,
-        userProfile?.email || '',
-        userProfile?.username ||
-          'Player'
-      );
-    };
-
-  // ============================================================
-  // WALLET
-  // ============================================================
-
-  const updateWallet =
-    async (
-      wallet: Partial<UserWallet>
-    ) => {
-      if (!userProfile) {
-        return;
-      }
-
-      const updatedWallet = {
-        ...userProfile.wallet,
-        ...wallet,
-      };
-
-      setUserProfile((prev) =>
-        prev
-          ? {
-              ...prev,
-              wallet:
-                updatedWallet,
-            }
-          : null
-      );
-
-      try {
-        const uid =
-          user?.uid ||
-          userProfile.uid;
-
-        await updateDoc(
-          doc(
-            db,
-            'users',
-            uid
-          ),
-          {
-            wallet:
-              updatedWallet,
-          }
-        );
-      } catch {
-        console.info(
-          '[Demo] wallet local update'
-        );
-      }
-    };
-
-  // ============================================================
-  // DEMO CHIPS
-  // ============================================================
-
-  const addDemoChips =
-    async (
-      amount: number
-    ) => {
-      if (!userProfile) {
-        return;
-      }
-
-      const newChips =
-        userProfile.demoChips +
-        amount;
-
-      setUserProfile((prev) =>
-        prev
-          ? {
-              ...prev,
-              demoChips:
-                newChips,
-            }
-          : null
-      );
-
-      try {
-        const uid =
-          user?.uid ||
-          userProfile.uid;
-
-        await updateDoc(
-          doc(
-            db,
-            'users',
-            uid
-          ),
-          {
-            demoChips:
-              newChips,
-          }
-        );
-      } catch {
-        console.info(
-          '[Demo] chips local update'
-        );
-      }
-    };
-
-  // ============================================================
-  // CONTEXT VALUE
-  // ============================================================
-
-  const value: AuthContextType =
-    {
-      user,
-      userProfile,
-      loading,
-      isAdmin,
-
-      login,
-      signup,
-      logout,
-      resetPassword,
-
-      updateUserProfile,
-      refreshProfile,
-
-      updateWallet,
-      addDemoChips,
     };
 
   return (
-    <AuthContext.Provider
-      value={value}
-    >
-      {children}
-    </AuthContext.Provider>
+    <div className="min-h-screen flex items-center justify-center p-4 animated-bg">
+      <div className="w-full max-w-md glass rounded-3xl p-8 border border-white/10 shadow-2xl">
+        {/* HEADER */}
+        <div className="text-center mb-8">
+          <div className="text-5xl mb-4">
+            ♠
+          </div>
+
+          <h1 className="text-3xl font-bold text-white mb-2">
+            Welcome Back
+          </h1>
+
+          <p className="text-gray-400">
+            Login to continue
+          </p>
+        </div>
+
+        {/* FORM */}
+        <form
+          onSubmit={handleSubmit(
+            onSubmit
+          )}
+          className="space-y-5"
+        >
+          {/* EMAIL */}
+          <div>
+            <label className="block text-sm text-gray-300 mb-2">
+              Email
+            </label>
+
+            <div className="relative">
+              <Mail className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+
+              <input
+                type="email"
+                placeholder="Enter email"
+                className="w-full h-12 pl-10 pr-4 rounded-xl bg-white/5 border border-white/10 text-white outline-none focus:border-amber-400"
+                {...register(
+                  'email',
+                  {
+                    required:
+                      'Email required',
+                  }
+                )}
+              />
+            </div>
+
+            {errors.email && (
+              <p className="text-red-400 text-xs mt-1">
+                {
+                  errors.email
+                    .message
+                }
+              </p>
+            )}
+          </div>
+
+          {/* PASSWORD */}
+          <div>
+            <label className="block text-sm text-gray-300 mb-2">
+              Password
+            </label>
+
+            <div className="relative">
+              <Lock className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+
+              <input
+                type={
+                  showPassword
+                    ? 'text'
+                    : 'password'
+                }
+                placeholder="Enter password"
+                className="w-full h-12 pl-10 pr-12 rounded-xl bg-white/5 border border-white/10 text-white outline-none focus:border-amber-400"
+                {...register(
+                  'password',
+                  {
+                    required:
+                      'Password required',
+                  }
+                )}
+              />
+
+              <button
+                type="button"
+                onClick={() =>
+                  setShowPassword(
+                    !showPassword
+                  )
+                }
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500"
+              >
+                {showPassword ? (
+                  <EyeOff className="w-4 h-4" />
+                ) : (
+                  <Eye className="w-4 h-4" />
+                )}
+              </button>
+            </div>
+
+            {errors.password && (
+              <p className="text-red-400 text-xs mt-1">
+                {
+                  errors.password
+                    .message
+                }
+              </p>
+            )}
+          </div>
+
+          {/* LOGIN BUTTON */}
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full h-12 rounded-xl bg-gradient-to-r from-amber-500 to-yellow-400 text-black font-bold hover:opacity-90 transition disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            <LogIn className="w-4 h-4" />
+
+            {loading
+              ? 'Please wait...'
+              : 'Login'}
+          </button>
+        </form>
+
+        {/* DEMO BUTTON */}
+        <button
+          onClick={handleDemoLogin}
+          disabled={loading}
+          className="w-full h-12 mt-4 rounded-xl border border-white/10 bg-white/5 text-white hover:bg-white/10 transition"
+        >
+          🎮 Continue as Demo
+        </button>
+
+        {/* FOOTER */}
+        <div className="mt-6 text-center text-sm text-gray-400">
+          Don&apos;t have an account?{' '}
+          <Link
+            to="/signup"
+            className="text-amber-400 hover:text-amber-300"
+          >
+            Sign Up
+          </Link>
+        </div>
+      </div>
+    </div>
   );
 };
 
-// ============================================================
-// HOOK
-// ============================================================
-
-export const useAuth =
-  (): AuthContextType => {
-    const context =
-      useContext(AuthContext);
-
-    if (!context) {
-      throw new Error(
-        'useAuth must be used within AuthProvider'
-      );
-    }
-
-    return context;
-  };
-
-export default AuthContext;
+export default LoginPage;
